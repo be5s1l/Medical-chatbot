@@ -18,6 +18,8 @@ langchain-huggingface>=0.1.0
 openai>=1.30.0
 langchain-openai>=0.2.0
 langchain-ollama>=0.2.0
+langchain-google-genai>=2.0.0
+langchain-groq>=0.2.0
 
 # NLP (HuggingFace)
 transformers>=4.40.0
@@ -30,7 +32,9 @@ chromadb>=0.5.0
 
 # OCR
 PyPDF2==3.0.1
-pytesseract==0.3.10
+# Optional: `pytesseract` pulls in `pandas` which can be blocked by Windows Application Control.
+# We call the Tesseract CLI directly, so keep this optional.
+# pytesseract==0.3.10
 Pillow>=11.0.0
 
 # Vision (optional in v1; Windows/Python version sensitive). Install later if needed:
