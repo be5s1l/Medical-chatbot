@@ -32,7 +32,7 @@ st.info(
     icon="ℹ️",
 )
 
-tab_chat, tab_vitals, tab_uploads = st.tabs(["Symptom chat", "Vitals", "Uploads"])
+tab_chat, tab_images, tab_labs = st.tabs(["Chat", "Image analysis", "Lab reports"])
 
 with tab_chat:
     query = st.text_area("Describe your symptoms", placeholder="Example: I've had a sore throat and mild cough for 2 days.")
@@ -47,82 +47,73 @@ with tab_chat:
             if resp.ok:
                 data = resp.json()
                 st.subheader("Response")
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.metric("Triage level (1=emergency)", data.get("triage_level", "—"))
-                with c2:
-                    st.caption("Conditions (extracted)")
-                    conditions = data.get("conditions") or []
-                    if isinstance(conditions, list) and conditions:
-                        st.markdown("\n".join([f"- {c}" for c in conditions]))
-                    else:
-                        st.caption("None detected")
-                st.write(data.get("response", ""))
-                st.caption(data.get("disclaimer", ""))
+                st.write(data.get("summary", ""))
+                causes = data.get("possible_causes") or []
+                if isinstance(causes, list) and causes:
+                    st.caption("Possible causes (non-diagnostic)")
+                    st.markdown("\n".join([f"- {c}" for c in causes]))
+                st.caption(f"Urgency: **{data.get('urgency', '—')}**")
+                st.write(data.get("advice", ""))
+                st.caption(DEFAULT_DISCLAIMER)
             else:
                 st.error(f"API error: {resp.status_code} {resp.text}")
         except requests.exceptions.ReadTimeout:
             st.error(
                 "The API took too long to respond. This is common on first run while models warm up "
-                "(Chroma embeddings download / Ollama model load). Try again in ~30–60s."
+                "(first request may be slower). Try again in ~30–60s."
             )
         except requests.RequestException as exc:
             st.error(f"Request failed: {exc}")
 
-with tab_vitals:
-    st.write("Enter any vitals you have. Leave fields blank if unknown.")
-    bp = st.text_input("Blood pressure", placeholder="120/80")
-    hr = st.number_input("Heart rate", min_value=0, max_value=250, value=0)
-    glucose = st.number_input("Glucose level", min_value=0.0, max_value=1000.0, value=0.0)
-    temp = st.number_input("Temperature (°C)", min_value=0.0, max_value=50.0, value=0.0)
-
-    if st.button("Analyze vitals"):
-        payload = {
-            "blood_pressure": bp or None,
-            "heart_rate": int(hr) if hr else None,
-            "glucose_level": float(glucose) if glucose else None,
-            "temperature": float(temp) if temp else None,
-        }
-        with st.spinner("Analyzing..."):
-            resp = requests.post(f"{API_BASE_URL}/upload/vitals", json=payload, timeout=60)
-        if resp.ok:
-            data = resp.json()
-            st.subheader("Vitals result")
-            st.json(data)
-        else:
-            st.error(f"API error: {resp.status_code} {resp.text}")
-
-with tab_uploads:
-    st.write("Upload a lab report PDF or a medical image (X-ray/scan).")
+with tab_images:
+    st.write("Upload a medical image (X-ray/scan/photo).")
     st.warning(
         "Do not upload real patient identifiers (names, MRNs, addresses). Use de-identified samples for demos."
     )
-    file = st.file_uploader("Choose a file", type=["pdf", "png", "jpg", "jpeg"])
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Upload document", disabled=file is None):
-            if file is not None:
-                with st.spinner("Uploading..."):
-                    resp = requests.post(
-                        f"{API_BASE_URL}/upload/document",
-                        files={"file": (file.name, file.getvalue(), file.type)},
-                        timeout=120,
-                    )
-                if resp.ok:
-                    st.json(resp.json())
-                else:
-                    st.error(f"API error: {resp.status_code} {resp.text}")
-    with col2:
-        if st.button("Upload image", disabled=file is None):
-            if file is not None:
-                with st.spinner("Uploading..."):
-                    resp = requests.post(
-                        f"{API_BASE_URL}/upload/image",
-                        files={"file": (file.name, file.getvalue(), file.type)},
-                        timeout=120,
-                    )
-                if resp.ok:
-                    st.json(resp.json())
-                else:
-                    st.error(f"API error: {resp.status_code} {resp.text}")
+    img = st.file_uploader("Choose an image", type=["png", "jpg", "jpeg", "webp"])
+    if st.button("Analyze image", disabled=img is None):
+        if img is not None:
+            with st.spinner("Analyzing..."):
+                resp = requests.post(
+                    f"{API_BASE_URL}/analyze-image",
+                    files={"file": (img.name, img.getvalue(), img.type)},
+                    timeout=180,
+                )
+            if resp.ok:
+                st.json(resp.json())
+            else:
+                st.error(f"API error: {resp.status_code} {resp.text}")
+
+with tab_labs:
+    st.write("Analyze lab reports (image OCR or PDF text extraction).")
+    st.warning(
+        "Do not upload real patient identifiers (names, MRNs, addresses). Use de-identified samples for demos."
+    )
+    lab_img = st.file_uploader("Lab report image", type=["png", "jpg", "jpeg", "webp"], key="lab_img")
+    if st.button("Analyze lab image", disabled=lab_img is None):
+        if lab_img is not None:
+            with st.spinner("OCR + simplifying..."):
+                resp = requests.post(
+                    f"{API_BASE_URL}/analyze-lab-image",
+                    files={"file": (lab_img.name, lab_img.getvalue(), lab_img.type)},
+                    timeout=240,
+                )
+            if resp.ok:
+                st.json(resp.json())
+            else:
+                st.error(f"API error: {resp.status_code} {resp.text}")
+
+    lab_pdf = st.file_uploader("Lab report PDF", type=["pdf"], key="lab_pdf")
+    if st.button("Analyze lab PDF", disabled=lab_pdf is None):
+        if lab_pdf is not None:
+            with st.spinner("Extracting + simplifying..."):
+                resp = requests.post(
+                    f"{API_BASE_URL}/analyze-lab-pdf",
+                    files={"file": (lab_pdf.name, lab_pdf.getvalue(), lab_pdf.type)},
+                    timeout=240,
+                )
+            if resp.ok:
+                st.json(resp.json())
+            else:
+                st.error(f"API error: {resp.status_code} {resp.text}")
 

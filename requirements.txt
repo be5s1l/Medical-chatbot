@@ -11,27 +11,16 @@ python-dotenv==1.0.1
 # Logging
 loguru==0.7.2
 
-# RAG / LLM orchestration (un-pinned for Python 3.13 compatibility)
-langchain>=0.3.0
-langchain-community>=0.3.0
-langchain-huggingface>=0.1.0
-openai>=1.30.0
-langchain-openai>=0.2.0
-langchain-ollama>=0.2.0
-langchain-google-genai>=2.0.0
+# LLM (Groq)
+langchain-core>=0.3.0
 langchain-groq>=0.2.0
 
-# NLP (HuggingFace)
-transformers>=4.40.0
-
-# Embeddings / vector DB (un-pinned for Python 3.13 compatibility)
-sentence-transformers>=3.0.0
-chromadb>=0.5.0
-# Optional fallback (Windows/Python versions vary). Install only if needed:
-# faiss-cpu
+# Vision (Gemini) — used ONLY for image description
+google-ai-generativelanguage>=0.6.0
 
 # OCR
 PyPDF2==3.0.1
+pdfplumber>=0.11.0
 # Optional: `pytesseract` pulls in `pandas` which can be blocked by Windows Application Control.
 # We call the Tesseract CLI directly, so keep this optional.
 # pytesseract==0.3.10
