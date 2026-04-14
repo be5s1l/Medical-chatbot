@@ -1,13 +1,18 @@
-# Run from repo root OR from medical_chatbot — starts FastAPI with correct cwd and .env
-$appDir = Join-Path $PSScriptRoot "medical_chatbot"
-if (-not (Test-Path (Join-Path $appDir "src\main.py"))) {
-    Write-Error "Expected medical_chatbot\src\main.py — run this script from the Medical-Chatbot repo root."
+# Run from repo root (recommended). Starts FastAPI from `medical_chatbot/`.
+$appDir = Join-Path $PSScriptRoot 'medical_chatbot'
+$mainPy = Join-Path $appDir 'src\main.py'
+
+if (-not (Test-Path $mainPy)) {
+    Write-Error 'Expected medical_chatbot\src\main.py. Run this script from the Medical-Chatbot repo root.'
     exit 1
 }
+
 Set-Location $appDir
-$venvPython = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
+
+$venvPython = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
 if (Test-Path $venvPython) {
     & $venvPython -m uvicorn src.main:app --reload
-} else {
-    python -m uvicorn src.main:app --reload
+    exit $LASTEXITCODE
 }
+
+python -m uvicorn src.main:app --reload
