@@ -24,7 +24,11 @@ function uid() {
   return Math.random().toString(16).slice(2) + "-" + Math.random().toString(16).slice(2);
 }
 
-const OPENING = "Hi, I’m MediBot. Please describe what you’re feeling today (symptoms, pain, how long it’s been going on).";
+const OPENING =
+  "Hi there! 👋 I'm MediBot, your personal health assistant.\n\n" +
+  "I'm here to help you understand your symptoms and guide you toward the right care.\n\n" +
+  "🩺 Tell me what you're feeling — describe your symptoms, how long you've had them, and anything else that feels relevant.\n\n" +
+  "I'll do my best to help you. Let's get started 💙";
 
 export function TriageChat() {
   const [messages, setMessages] = useState<ChatMsg[]>(() => [
