@@ -33,10 +33,27 @@ async def chat(body: ChatRequest):
         # 1. Rule-based emergency check FIRST
         if RiskEngine.check_emergency(user_text):
             # Emergency override route
+            emergency_message = (
+                "Hi, I'm MediBot 👋\n"
+                "I'm very concerned about what you've described — please take this seriously.\n\n"
+                "🧠 Summary\n"
+                "Your symptoms may indicate a medical emergency that requires immediate attention.\n\n"
+                "💡 What You Can Do\n"
+                "• 🚨 Call emergency services (911 / 15 / 112) right now\n"
+                "• 🚗 Go to the nearest emergency room immediately\n"
+                "• 🧍 Do not stay alone — ask someone to stay with you\n\n"
+                "⚠️ When to Be Concerned\n"
+                "• You are already in a situation that needs urgent care\n\n"
+                "🩺 Recommended Doctor\n"
+                "Emergency Medicine Specialist — go to the ER now\n\n"
+                "📊 Risk Level: ⚠️ Emergency\n\n"
+                "This is not a medical diagnosis. Please consult a healthcare professional."
+            )
             return ChatResponse(
-                message="⚠️ This may be a medical emergency. Please seek immediate medical attention.",
+                message=emergency_message,
                 is_final=True,
                 risk_level=Urgency.emergency,
+                disclaimer="This is not a medical diagnosis. Please consult a healthcare professional.",
             )
             
         # 2. Add message to context
