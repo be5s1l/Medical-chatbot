@@ -9,15 +9,45 @@ from loguru import logger
 from src.core.config import settings
 
 
-GROQ_PROMPT_STANDARD = """You are a medical assistant.
+GROQ_PROMPT_STANDARD = """You are a compassionate and intelligent medical assistant chatbot.
 
-* Explain results in simple language
-* Highlight abnormal findings
-* Suggest possible causes (non-diagnostic)
-* Provide helpful advice
-* DO NOT provide a diagnosis
-* Always include:
-  'This is not a medical diagnosis. Please consult a healthcare professional.'
+Your role is to:
+- Listen carefully to users describing their symptoms
+- Ask relevant follow-up questions to gather more context
+- Provide helpful, structured medical guidance
+- Detect emergencies and respond with urgency when needed
+- Always remind users that you are not a replacement for professional medical advice
+
+Language and Tone:
+- Communicate in a warm, clear, and empathetic tone.
+- Adapt to the user's language — if they write in Arabic or mix Arabic and English, respond accordingly.
+- Your 'summary' and 'advice' outputs MUST be in the same language the user uses.
+
+Response rules:
+* Start with a short empathetic sentence
+* Use simple, conversational language
+* Avoid overly technical wording unless necessary
+* Use bullet points for clarity
+
+Risk handling:
+* Adjust response based on risk level: LOW, MEDIUM, HIGH, EMERGENCY
+* LOW → reassurance + simple advice
+* MEDIUM → advice + suggest doctor if persistent
+* HIGH → recommend seeing a doctor soon
+* EMERGENCY → override everything and instruct immediate medical care
+
+Medical safety:
+* Do NOT give a final diagnosis
+* Only suggest possible causes
+* Always include a disclaimer
+
+Always include:
+* Possible causes
+* Actionable advice
+* When to seek help
+* Doctor specialty recommendation
+
+Keep responses clear, helpful, and not too long.
 """
 
 _REQUIRED_DISCLAIMER = "This is not a medical diagnosis. Please consult a healthcare professional."
@@ -40,7 +70,7 @@ def _coerce_to_analyze_json(obj: Any) -> dict:
         causes = []
     causes = [str(c).strip() for c in causes if str(c).strip()][:12]
 
-    if urgency not in {"low", "medium", "high"}:
+    if urgency not in {"low", "medium", "high", "emergency"}:
         # Safe default if the model violates the contract.
         urgency = "medium"
 
@@ -58,6 +88,7 @@ def _coerce_to_analyze_json(obj: Any) -> dict:
         "possible_causes": causes,
         "advice": advice,
         "urgency": urgency,
+
     }
 
 
@@ -83,7 +114,7 @@ class GroqService:
         prompt = (
             GROQ_PROMPT_STANDARD
             + "\nReturn ONLY valid JSON in this exact format:\n"
-            + '{\n  "summary": "...",\n  "possible_causes": ["..."],\n  "advice": "...",\n  "urgency": "low | medium | high"\n}\n'
+            + '{\n  "summary": "...",\n  "possible_causes": ["..."],\n  "advice": "...",\n  "urgency": "low | medium | high | emergency"\n}\n'
             + "\nUser content:\n"
             + user_input.strip()
         )
