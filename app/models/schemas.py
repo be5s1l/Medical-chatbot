@@ -1,34 +1,61 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
 
 class Urgency(str, Enum):
-    low = "low"
-    medium = "medium"
-    high = "high"
-    emergency = "emergency"
+    low = "LOW"
+    medium = "MEDIUM"
+    high = "HIGH"
+    emergency = "EMERGENCY"
+
+
+class ChatMessageRequestType(str, Enum):
+    text = "text"
+    image = "image"
+    report = "report"
+
+
+class ChatRequestMetadata(BaseModel):
+    age: Optional[int] = None
+    gender: Optional[str] = None
 
 
 class ChatRequest(BaseModel):
     session_id: str = Field(..., description="Unique ID for the conversation session")
-    query: str = Field(..., min_length=1, max_length=4000)
+    message: str = Field(..., min_length=1, max_length=4000)
+    type: ChatMessageRequestType = Field(default=ChatMessageRequestType.text)
+    metadata: Optional[ChatRequestMetadata] = None
 
 
-class ChatResponse(BaseModel):
+class StructuredDiagnosis(BaseModel):
+    summary: str
+    possible_causes: List[str]
+    advice: List[str]
+    when_to_worry: List[str]
+    recommended_doctors: List[str]
+    risk: str
+
+
+class ChatResponseData(BaseModel):
     message: str
-    is_final: bool = False
-    empathy: Optional[str] = None
-    summary: Optional[str] = None
-    possible_causes: Optional[List[str]] = None
-    what_you_can_do: Optional[str] = None
-    when_to_be_concerned: Optional[str] = None
-    recommended_specialist: Optional[str] = None
-    disclaimer: Optional[str] = None
-    risk_level: Optional[Urgency] = None
+    risk_level: Urgency
+    follow_up_questions: List[str] = Field(default_factory=list)
+    structured: Optional[StructuredDiagnosis] = None
+
+
+class ErrorDetail(BaseModel):
+    code: str
+    message: str
+
+
+class APIResponse(BaseModel):
+    success: bool
+    data: Optional[ChatResponseData] = None
+    error: Optional[ErrorDetail] = None
 
 
 class SessionState(BaseModel):

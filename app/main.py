@@ -5,8 +5,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers.chat import router as chat_router
-from app.routers.image import router as image_router
-from app.routers.lab import router as lab_router
 
 
 def create_app() -> FastAPI:
@@ -24,8 +22,6 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(chat_router)
-    app.include_router(image_router)
-    app.include_router(lab_router)
 
     @app.get("/health")
     async def health():
