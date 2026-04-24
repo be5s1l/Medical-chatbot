@@ -57,11 +57,45 @@ class LLMService:
         """Generate response based on chat history as a strict ChatResponseData structure."""
         from langchain_core.messages import HumanMessage, SystemMessage
 
-        system_prompt = """You are a medical reasoning AI. 
-        - Your output will be consumed by an API. Do NOT use emojis, markdown formatting, or conversational filler inside structured fields.
-        - Analyze the user symptoms and provide structured medical intelligence.
-        - Do NOT give a final diagnosis. Only suggest possible causes.
-        - Ask follow-up questions if you need more context."""
+        system_prompt = """You are a multilingual medical assistant chatbot.
+
+# 🎯 Goal
+Always respond in the SAME language as the user's message.
+
+# 🌍 Language Rules
+1. Detect the language of the user's input automatically.
+2. Respond in the same language:
+   * If user writes in English -> respond in English
+   * If user writes in Arabic -> respond in Arabic
+   * If user mixes languages -> respond in the dominant language
+3. Do NOT translate unless necessary.
+4. Do NOT switch languages randomly.
+
+# 🧠 Tone & Style
+* Be natural, human, and empathetic
+* Avoid robotic phrasing
+* Keep sentences clear and simple
+* Use culturally appropriate wording
+* Adjust tone based on risk: LOW -> calm/reassuring, MEDIUM -> cautious, HIGH -> strong recommendation to see doctor, EMERGENCY -> urgent/direct.
+
+# ⚠️ Medical Safety
+* Do NOT provide final diagnosis
+* Provide possible causes only
+* Always recommend consulting a doctor
+* Apply emergency override if needed
+
+# 🔴 Emergency Rule (ALL languages)
+If symptoms indicate emergency:
+Respond immediately with:
+"⚠️ This may be a medical emergency. Please seek immediate medical attention."
+Translate this message into the user's language if needed.
+
+# ⚠️ Constraints
+* Do not mix languages in the same response
+* Keep formatting clean and readable
+* Maintain consistent structure regardless of language
+* Your output will be consumed by an API. Do NOT use emojis, markdown formatting, or conversational filler inside structured fields.
+"""
 
         history_str = "\n".join([f"{m['role'].capitalize()}: {m['content']}" for m in session.messages])
 
@@ -71,8 +105,8 @@ class LLMService:
             (e.g., duration, severity, related symptoms).
             Return ONLY valid JSON in this exact format:
             {
-                "message": "A single conversational string asking the follow-up questions.",
-                "follow_up_questions": ["Question 1", "Question 2"]
+                "message": "A single conversational string asking the follow-up questions in the user's language. Include an empathy sentence if appropriate.",
+                "follow_up_questions": ["Question 1 (in user's language)", "Question 2 (in user's language)"]
             }
             """
             try:
@@ -106,15 +140,15 @@ class LLMService:
             prompt = """
             Analyze the gathered symptoms and chat history. Return ONLY valid JSON in this exact format:
             {
-                "message": "A brief natural language summary of the findings (plain text, no markdown).",
+                "message": "An empathetic sentence followed by a brief disclaimer that you are an AI and they should consult a doctor, written in the user's language.",
                 "risk_level": "LOW | MEDIUM | HIGH | EMERGENCY",
                 "structured": {
-                    "summary": "1-2 sentence clinical summary.",
-                    "possible_causes": ["Cause 1", "Cause 2"],
-                    "advice": ["Advice 1", "Advice 2"],
-                    "when_to_worry": ["Red flag 1", "Red flag 2"],
-                    "recommended_doctors": ["Specialist 1", "Specialist 2"],
-                    "risk": "Brief explanation of the risk level."
+                    "summary": "1-2 sentence clinical summary (in user's language).",
+                    "possible_causes": ["Cause 1 (in user's language)", "Cause 2 (in user's language)"],
+                    "advice": ["What You Can Do 1 (in user's language)", "What You Can Do 2 (in user's language)"],
+                    "when_to_worry": ["When to Be Concerned 1 (in user's language)", "When to Be Concerned 2 (in user's language)"],
+                    "recommended_doctors": ["Recommended Doctor 1 (in user's language)", "Recommended Doctor 2 (in user's language)"],
+                    "risk": "Brief explanation of the risk level (in user's language)."
                 }
             }
             """
