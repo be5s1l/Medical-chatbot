@@ -15,8 +15,6 @@ class Urgency(str, Enum):
 
 class ChatMessageRequestType(str, Enum):
     text = "text"
-    image = "image"
-    report = "report"
 
 
 class ChatRequestMetadata(BaseModel):

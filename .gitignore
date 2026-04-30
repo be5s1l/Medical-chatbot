@@ -11,9 +11,6 @@ htmlcov/
 # Vector DB persistence (local)
 data/chroma_db/
 
-# Uploads (local)
-data/uploads/
-
 # OS / editor
 .DS_Store
 Thumbs.db
