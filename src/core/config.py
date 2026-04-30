@@ -1,19 +1,13 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
+from typing import Literal
 
 class Settings(BaseSettings):
-    # Text generation (Groq)
-    groq_api_key: str = ""
-    groq_model: str = "llama-3.3-70b-versatile"
-
-    # Vision (Gemini) — used ONLY for image description
+    # Text generation (Gemini)
     gemini_api_key: str = ""
-    vision_model: str = "models/gemini-2.5-flash-image"
+    gemini_model: str = "gemini-1.5-flash"
 
-    # OCR
-    tesseract_path: str = "C:/Program Files/Tesseract-OCR/tesseract.exe"
-
-    log_level: str = "DEBUG"
+    log_level: str = "INFO"
+    app_lang: Literal["en", "ar"] = "ar" # default language for the app if not specified
     # When true, API may return exception text in JSON `detail` (dev only; do not enable in public prod).
     app_debug: bool = False
 

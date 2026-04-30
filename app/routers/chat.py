@@ -40,6 +40,8 @@ async def chat(body: ChatRequest):
             return APIResponse(success=True, data=data)
             
         # 2. Add message to context
+        logger.info(f"[INFO] New request received - Session: {session_id}")
+        logger.info(f"[INFO] User: \"{user_text}\"")
         _conversation_manager.add_message(session_id, "user", user_text)
         
         # 3. Analyze LLM for symptoms
@@ -64,12 +66,13 @@ async def chat(body: ChatRequest):
         llm_response = await llm_service.generate_response(session, is_final=is_final)
         
         # Add generated answer to history
+        logger.info(f"[INFO] Bot: \"{llm_response.message}\"")
         _conversation_manager.add_message(session_id, "assistant", llm_response.message)
             
         return APIResponse(success=True, data=llm_response)
 
     except Exception as exc:
-        logger.exception("Chat API error")
+        logger.error(f"[ERROR] Exception: {exc}")
         return APIResponse(
             success=False,
             error=ErrorDetail(

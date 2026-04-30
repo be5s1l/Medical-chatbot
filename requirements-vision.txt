@@ -1,4 +1,0 @@
-# Optional: CheXNet / medical imaging (install matching torch for your OS/Python)
-torch
-torchvision
-torchxrayvision

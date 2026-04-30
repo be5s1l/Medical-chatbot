@@ -3,27 +3,37 @@ import re
 from typing import Any, Dict
 
 from loguru import logger
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.models.schemas import SessionState, ChatResponseData, StructuredDiagnosis, Urgency
 from src.core.config import settings
+from app.services.conversation_manager import ARABIC_SYSTEM_TEMPLATE, ENGLISH_SYSTEM_TEMPLATE
 
 
 class LLMService:
     def __init__(self) -> None:
-        from langchain_groq import ChatGroq  # type: ignore
-
-        if not getattr(settings, "groq_api_key", ""):
-            raise RuntimeError("GROQ_API_KEY is not set")
-        self._llm = ChatGroq(
-            model_name=getattr(settings, "groq_model", "llama-3.3-70b-versatile"),
-            groq_api_key=getattr(settings, "groq_api_key", ""),
+        if not settings.gemini_api_key:
+            raise RuntimeError("GEMINI_API_KEY is not set")
+        
+        self._llm = ChatGoogleGenerativeAI(
+            model=settings.gemini_model,
+            google_api_key=settings.gemini_api_key,
             temperature=0.1,
+            timeout=30, # Timeout handling
         )
+
+    async def generate_response_raw(self, prompt: str) -> str:
+        """Reusable function to generate a raw text response from the LLM."""
+        try:
+            msg = await self._llm.ainvoke([HumanMessage(content=prompt)])
+            return (getattr(msg, "content", None) or str(msg)).strip()
+        except Exception as exc:
+            logger.error(f"Gemini API call failed: {exc}")
+            return ""
 
     async def analyze_input(self, user_text: str) -> Dict[str, Any]:
         """Extract symptoms and determine if enough context is provided."""
-        from langchain_core.messages import HumanMessage, SystemMessage
-
         prompt = f"""
         Extract the user's symptoms and how long they've had them (duration).
         Determine if there is enough context. (At least 1 symptom + its duration, OR >= 2 symptoms).
@@ -53,59 +63,30 @@ class LLMService:
             logger.error(f"Failed to analyze input: {exc}")
             return {"symptoms": [], "duration": "", "has_enough_info": False}
 
+    def _get_system_prompt(self) -> str:
+        """Get system prompt based on config language."""
+        if settings.app_lang == "ar":
+            return ARABIC_SYSTEM_TEMPLATE.messages[0].prompt.template
+        return ENGLISH_SYSTEM_TEMPLATE.messages[0].prompt.template
+
     async def generate_response(self, session: SessionState, is_final: bool) -> ChatResponseData:
         """Generate response based on chat history as a strict ChatResponseData structure."""
-        from langchain_core.messages import HumanMessage, SystemMessage
-
-        system_prompt = """You are a multilingual medical assistant chatbot.
-
-# 🎯 Goal
-Always respond in the EXACT SAME language as the user's message.
-
-# 🌍 Language Rules
-1. Detect the language of the user's input automatically.
-2. Respond in the same language:
-   * If user writes in English -> you MUST respond in English ONLY. Absolutely NO Chinese characters or other languages.
-   * If user writes in Arabic -> respond in Arabic.
-   * If user mixes languages -> respond in the dominant language.
-3. Do NOT translate unless necessary.
-4. Do NOT switch languages randomly or output characters from non-requested languages.
-
-# 🧠 Tone & Style
-* Be natural, human, and empathetic
-* Avoid robotic phrasing
-* Keep sentences clear and simple
-* Use culturally appropriate wording
-* Adjust tone based on risk: LOW -> calm/reassuring, MEDIUM -> cautious, HIGH -> strong recommendation to see doctor, EMERGENCY -> urgent/direct.
-
-# ⚠️ Medical Safety
-* Do NOT provide final diagnosis
-* Provide possible causes only
-* Always recommend consulting a doctor
-* Apply emergency override if needed
-
-# 🔴 Emergency Rule (ALL languages)
-If symptoms indicate emergency:
-Respond immediately with:
-"⚠️ This may be a medical emergency. Please seek immediate medical attention."
-Translate this message into the user's language if needed.
-
-# ⚠️ Constraints
-* Do not mix languages in the same response
-* Keep formatting clean and readable
-* Maintain consistent structure regardless of language
-* Your output will be consumed by an API. Do NOT use emojis, markdown formatting, or conversational filler inside structured fields.
-"""
-
+        system_prompt = self._get_system_prompt()
         history_str = "\n".join([f"{m['role'].capitalize()}: {m['content']}" for m in session.messages])
 
         if not is_final:
             prompt = """
             Based on the conversation so far, ask 1 to 2 follow-up questions to gather missing medical details 
             (e.g., duration, severity, related symptoms).
+            
+            IMPORTANT:
+            - If this is the FIRST response after symptoms were described, include a BRIEF empathy sentence.
+            - Otherwise, be direct and natural.
+            - Ask ONLY 1-2 questions.
+            
             Return ONLY valid JSON in this exact format:
             {
-                "message": "A single conversational string asking the follow-up questions in the user's language. Include an empathy sentence if appropriate.",
+                "message": "A single conversational string asking the follow-up questions in the user's language.",
                 "follow_up_questions": ["Question 1 (in user's language)", "Question 2 (in user's language)"]
             }
             """
@@ -140,7 +121,7 @@ Translate this message into the user's language if needed.
             prompt = """
             Analyze the gathered symptoms and chat history. Return ONLY valid JSON in this exact format:
             {
-                "message": "An empathetic sentence followed by a brief disclaimer that you are an AI and they should consult a doctor, written in the user's language.",
+                "message": "A brief conclusion message in the user's language.",
                 "risk_level": "LOW | MEDIUM | HIGH | EMERGENCY",
                 "structured": {
                     "summary": "1-2 sentence clinical summary (in user's language).",
