@@ -29,7 +29,7 @@ It **does not handle**:
 
 ### Requirements
 - Python 3.10+
-- A valid Groq API Key
+- A valid Gemini API Key
 
 ### Installation
 
@@ -49,7 +49,7 @@ pip install -r requirements.txt
 Copy `.env.example` to `.env` and assign your keys:
 ```env
 # medical_chatbot/.env
-GROQ_API_KEY="your-groq-key-here"
+GEMINI_API_KEY="your-gemini-key-here"
 ```
 
 ### Running the server
