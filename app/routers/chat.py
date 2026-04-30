@@ -5,7 +5,7 @@ from loguru import logger
 
 from app.models.schemas import ChatRequest, ChatResponseData, APIResponse, ErrorDetail, Urgency
 from app.services.conversation_manager import ConversationManager
-from app.services.llm_service import LLMService
+from app.services.llm_service import LLMService, QuotaExceededError
 from app.services.risk_engine import RiskEngine
 
 router = APIRouter(tags=["Chat"])
@@ -71,6 +71,15 @@ async def chat(body: ChatRequest):
             
         return APIResponse(success=True, data=llm_response)
 
+    except QuotaExceededError as exc:
+        logger.error(f"[ERROR] Quota Exceeded: {exc}")
+        return APIResponse(
+            success=False,
+            error=ErrorDetail(
+                code="QUOTA_EXCEEDED",
+                message="The Gemini API token limit has been reached. Please try again later."
+            )
+        )
     except Exception as exc:
         logger.error(f"[ERROR] Exception: {exc}")
         return APIResponse(

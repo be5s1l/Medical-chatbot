@@ -5,6 +5,12 @@ from typing import Any, Dict
 from loguru import logger
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
+from google.api_core.exceptions import ResourceExhausted
+
+class QuotaExceededError(Exception):
+    """Raised when the LLM API quota has been exhausted."""
+    pass
+
 
 from app.models.schemas import SessionState, ChatResponseData, StructuredDiagnosis, Urgency
 from src.core.config import settings
@@ -28,6 +34,9 @@ class LLMService:
         try:
             msg = await self._llm.ainvoke([HumanMessage(content=prompt)])
             return (getattr(msg, "content", None) or str(msg)).strip()
+        except ResourceExhausted as exc:
+            logger.error(f"Gemini API quota exceeded: {exc}")
+            raise QuotaExceededError("The Gemini API token limit has been reached.") from exc
         except Exception as exc:
             logger.error(f"Gemini API call failed: {exc}")
             return ""
@@ -59,6 +68,9 @@ class LLMService:
             if m:
                 text = m.group(0)
             return json.loads(text)
+        except ResourceExhausted as exc:
+            logger.error(f"Gemini API quota exceeded: {exc}")
+            raise QuotaExceededError("The Gemini API token limit has been reached.") from exc
         except Exception as exc:
             logger.error(f"Failed to analyze input: {exc}")
             return {"symptoms": [], "duration": "", "has_enough_info": False}
@@ -109,6 +121,9 @@ class LLMService:
                     follow_up_questions=data.get("follow_up_questions", []),
                     structured=None
                 )
+            except ResourceExhausted as exc:
+                logger.error(f"Gemini API quota exceeded: {exc}")
+                raise QuotaExceededError("The Gemini API token limit has been reached.") from exc
             except Exception as exc:
                 logger.error(f"Failed asking follow-up: {exc}")
                 return ChatResponseData(
@@ -180,6 +195,9 @@ class LLMService:
                     structured=structured
                 )
 
+            except ResourceExhausted as exc:
+                logger.error(f"Gemini API quota exceeded: {exc}")
+                raise QuotaExceededError("The Gemini API token limit has been reached.") from exc
             except Exception as exc:
                 logger.exception("Failed generating final response")
                 return ChatResponseData(
