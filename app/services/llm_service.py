@@ -15,6 +15,7 @@ class QuotaExceededError(Exception):
 from app.models.schemas import SessionState, ChatResponseData, StructuredDiagnosis, Urgency
 from src.core.config import settings
 from app.services.conversation_manager import ARABIC_SYSTEM_TEMPLATE, ENGLISH_SYSTEM_TEMPLATE
+from app.services.context_filter import ContextFilter
 
 
 class LLMService:
@@ -86,6 +87,13 @@ class LLMService:
         system_prompt = self._get_system_prompt()
         history_str = "\n".join([f"{m['role'].capitalize()}: {m['content']}" for m in session.messages])
 
+        medical_context_str = ""
+        if getattr(session, 'medical_context', None):
+            filtered_context = ContextFilter.filter_relevant_context(session.symptoms, session.medical_context)
+            if filtered_context:
+                mc_lines = [f"* {k.capitalize()}: {v}" for k, v in filtered_context.items()]
+                medical_context_str = "Patient Medical Context:\n" + "\n".join(mc_lines) + "\n\n"
+
         if not is_final:
             prompt = """
             Based on the conversation so far, ask 1 to 2 follow-up questions to gather missing medical details 
@@ -106,7 +114,7 @@ class LLMService:
                 msg = await self._llm.ainvoke(
                     [
                         SystemMessage(content=system_prompt),
-                        HumanMessage(content=f"Chat history:\n{history_str}\n\nTask: {prompt}"),
+                        HumanMessage(content=f"{medical_context_str}Chat history:\n{history_str}\n\nTask: {prompt}"),
                     ]
                 )
                 text = (getattr(msg, "content", None) or str(msg)).strip()
@@ -134,9 +142,17 @@ class LLMService:
                 )
         else:
             prompt = """
-            Analyze the gathered symptoms and chat history. Return ONLY valid JSON in this exact format:
+            Analyze the gathered symptoms and chat history.
+            
+            # Behavior Rules
+            - Use medical context to IMPROVE reasoning.
+            - Do NOT blindly rely on it.
+            - Do NOT produce a diagnosis.
+            - Adjust possible causes based on history.
+            
+            Return ONLY valid JSON in this exact format:
             {
-                "message": "A brief conclusion message in the user's language.",
+                "message": "A brief conclusion message in the user's language. If medical history is relevant, optionally include 'Based on your medical history (e.g. diabetes), your symptoms may be related to...'",
                 "risk_level": "LOW | MEDIUM | HIGH | EMERGENCY",
                 "structured": {
                     "summary": "1-2 sentence clinical summary (in user's language).",
@@ -156,6 +172,7 @@ class LLMService:
                         SystemMessage(content=system_prompt),
                         HumanMessage(
                             content=(
+                                f"{medical_context_str}"
                                 f"Chat history:\n{history_str}\n\n"
                                 f"Symptoms: {symptoms_str}\n"
                                 f"Duration: {session.duration}\n"

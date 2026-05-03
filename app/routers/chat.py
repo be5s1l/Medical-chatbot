@@ -52,7 +52,8 @@ async def chat(body: ChatRequest):
         has_enough_info = analysis.get("has_enough_info", False)
         
         # Update session memory
-        _conversation_manager.update_session(session_id, symptoms, duration)
+        medical_context_dict = body.medical_context.model_dump() if body.medical_context else None
+        _conversation_manager.update_session(session_id, symptoms, duration, medical_context_dict)
         session = _conversation_manager.get_session(session_id)
         
         # 4. Continually assess risk based on growing symptom tracker

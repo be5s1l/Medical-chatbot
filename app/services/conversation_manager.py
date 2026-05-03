@@ -107,7 +107,7 @@ class ConversationManager:
         session = self.get_session(session_id)
         session.messages.append({"role": role, "content": content})
 
-    def update_session(self, session_id: str, new_symptoms: List[str], duration: str) -> None:
+    def update_session(self, session_id: str, new_symptoms: List[str], duration: str, medical_context: dict = None) -> None:
         session = self.get_session(session_id)
         current_symptoms = set(session.symptoms)
         
@@ -118,3 +118,6 @@ class ConversationManager:
         
         if duration:
             session.duration = duration
+
+        if medical_context is not None:
+            session.medical_context = medical_context

@@ -22,11 +22,22 @@ class ChatRequestMetadata(BaseModel):
     gender: Optional[str] = None
 
 
+class MedicalContext(BaseModel):
+    age: Optional[int] = None
+    gender: Optional[str] = None
+    conditions: List[str] = Field(default_factory=list)
+    surgeries: List[str] = Field(default_factory=list)
+    medications: List[str] = Field(default_factory=list)
+    allergies: List[str] = Field(default_factory=list)
+    lab_results: List[str] = Field(default_factory=list)
+
+
 class ChatRequest(BaseModel):
     session_id: str = Field(..., description="Unique ID for the conversation session")
     message: str = Field(..., min_length=1, max_length=4000)
     type: ChatMessageRequestType = Field(default=ChatMessageRequestType.text)
     metadata: Optional[ChatRequestMetadata] = None
+    medical_context: Optional[MedicalContext] = None
 
 
 class StructuredDiagnosis(BaseModel):
@@ -63,6 +74,7 @@ class SessionState(BaseModel):
     duration: str = ""
     risk_level: str = ""
     flags: Dict[str, bool] = Field(default_factory=lambda: {"emergency": False})
+    medical_context: Optional[Dict[str, Any]] = None
 
 class AnalyzeResponse(BaseModel):
     """Strict output schema used by all analyze endpoints."""
