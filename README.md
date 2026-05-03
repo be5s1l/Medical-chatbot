@@ -25,6 +25,12 @@ It **does not handle**:
 - **Risk scoring:** Continuously scores risk levels (`LOW`, `MEDIUM`, `HIGH`, `EMERGENCY`) and escalates automatically.
 - **Format Integrity:** Outputs strict, clean JSON. Does not generate emojis, markup, or chat UI artifacts.
 
+## Medical Record Integration
+The AI microservice integrates securely with medical records provided by the .NET backend. 
+- **Data Source:** Medical data is received as part of the `ChatRequest` payload via the `medical_context` field. The .NET backend acts as the sole source of truth.
+- **Enhanced Reasoning:** When provided, the AI filters relevant conditions, medications, and labs, injecting them into its prompt context to offer highly personalized possible causes and advice.
+- **Ephemeral Storage:** Medical data is **not permanently stored** by this microservice. It is kept only in memory tied to the active `session_id`.
+
 ## Setup Instructions
 
 ### Requirements
