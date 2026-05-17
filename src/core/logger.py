@@ -1,15 +1,19 @@
+import os
 import sys
+from pathlib import Path
 
 from loguru import logger
 
 from src.core.config import settings
 
+# Determine the absolute project root (parent of src)
+PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 def setup_logging() -> None:
     logger.remove()
-    import os
-    if not os.path.exists("logs"):
-        os.makedirs("logs")
+    
+    log_dir = PROJECT_ROOT / "logs"
+    log_dir.mkdir(exist_ok=True)
 
     # Console output
     logger.add(
@@ -21,7 +25,7 @@ def setup_logging() -> None:
     
     # File output
     logger.add(
-        "logs/chatbot.log",
+        str(log_dir / "chatbot.log"),
         rotation="10 MB",
         retention="1 week",
         level=settings.log_level.upper(),
@@ -29,7 +33,6 @@ def setup_logging() -> None:
         diagnose=True,
         enqueue=True, # Ensure thread-safe and flushed
     )
-
 
 setup_logging()
 
