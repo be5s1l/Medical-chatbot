@@ -1,46 +1,45 @@
 import json
 import re
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from loguru import logger
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import HumanMessage, SystemMessage
-from google.api_core.exceptions import ResourceExhausted
-
-class QuotaExceededError(Exception):
-    """Raised when the LLM API quota has been exhausted."""
-    pass
-
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from app.models.schemas import SessionState, ChatResponseData, StructuredDiagnosis, Urgency
 from src.core.config import settings
 from app.services.conversation_manager import ARABIC_SYSTEM_TEMPLATE, ENGLISH_SYSTEM_TEMPLATE
 from app.services.context_filter import ContextFilter
+from app.services.gemini_quota import QuotaExceededError, invoke_with_quota_handling
+
+# Re-export for callers that import from llm_service.
+__all__ = ["LLMService", "QuotaExceededError"]
 
 
 class LLMService:
     def __init__(self) -> None:
         if not settings.gemini_api_key:
             raise RuntimeError("GEMINI_API_KEY is not set")
-        
+
         self._llm = ChatGoogleGenerativeAI(
             model=settings.gemini_model,
             google_api_key=settings.gemini_api_key,
             temperature=0.1,
-            timeout=30, # Timeout handling
+            timeout=30,
         )
+
+    async def _invoke(self, messages: List[BaseMessage], *, operation: str):
+        """Single Gemini call with quota detection and limited retries."""
+
+        async def _call():
+            return await self._llm.ainvoke(messages)
+
+        return await invoke_with_quota_handling(_call, operation=operation)
 
     async def generate_response_raw(self, prompt: str) -> str:
         """Reusable function to generate a raw text response from the LLM."""
-        try:
-            msg = await self._llm.ainvoke([HumanMessage(content=prompt)])
-            return (getattr(msg, "content", None) or str(msg)).strip()
-        except ResourceExhausted as exc:
-            logger.error(f"Gemini API quota exceeded: {exc}")
-            raise QuotaExceededError("The Gemini API token limit has been reached.") from exc
-        except Exception as exc:
-            logger.error(f"Gemini API call failed: {exc}")
-            return ""
+        msg = await self._invoke([HumanMessage(content=prompt)], operation="generate_response_raw")
+        return (getattr(msg, "content", None) or str(msg)).strip()
 
     async def analyze_input(self, user_text: str) -> Dict[str, Any]:
         """Extract symptoms and determine if enough context is provided."""
@@ -57,11 +56,12 @@ class LLMService:
         """
 
         try:
-            msg = await self._llm.ainvoke(
+            msg = await self._invoke(
                 [
                     SystemMessage(content="You extract structured medical information."),
                     HumanMessage(content=prompt),
-                ]
+                ],
+                operation="analyze_input",
             )
             text = (getattr(msg, "content", None) or str(msg)).strip()
 
@@ -69,9 +69,8 @@ class LLMService:
             if m:
                 text = m.group(0)
             return json.loads(text)
-        except ResourceExhausted as exc:
-            logger.error(f"Gemini API quota exceeded: {exc}")
-            raise QuotaExceededError("The Gemini API token limit has been reached.") from exc
+        except QuotaExceededError:
+            raise
         except Exception as exc:
             logger.error(f"Failed to analyze input: {exc}")
             return {"symptoms": [], "duration": "", "has_enough_info": False}
@@ -88,8 +87,10 @@ class LLMService:
         history_str = "\n".join([f"{m['role'].capitalize()}: {m['content']}" for m in session.messages])
 
         medical_context_str = ""
-        if getattr(session, 'medical_context', None):
-            filtered_context = ContextFilter.filter_relevant_context(session.symptoms, session.medical_context)
+        if getattr(session, "medical_context", None):
+            filtered_context = ContextFilter.filter_relevant_context(
+                session.symptoms, session.medical_context
+            )
             if filtered_context:
                 mc_lines = [f"* {k.capitalize()}: {v}" for k, v in filtered_context.items()]
                 medical_context_str = "Patient Medical Context:\n" + "\n".join(mc_lines) + "\n\n"
@@ -111,37 +112,39 @@ class LLMService:
             }
             """
             try:
-                msg = await self._llm.ainvoke(
+                msg = await self._invoke(
                     [
                         SystemMessage(content=system_prompt),
-                        HumanMessage(content=f"{medical_context_str}Chat history:\n{history_str}\n\nTask: {prompt}"),
-                    ]
+                        HumanMessage(
+                            content=f"{medical_context_str}Chat history:\n{history_str}\n\nTask: {prompt}"
+                        ),
+                    ],
+                    operation="generate_response",
                 )
                 text = (getattr(msg, "content", None) or str(msg)).strip()
                 m = re.search(r"\{[\s\S]*\}", text)
                 if m:
                     text = m.group(0)
                 data = json.loads(text)
-                
+
                 return ChatResponseData(
                     message=data.get("message", "Could you tell me a little more about your symptoms?"),
                     risk_level=Urgency.medium,
                     follow_up_questions=data.get("follow_up_questions", []),
-                    structured=None
+                    structured=None,
                 )
-            except ResourceExhausted as exc:
-                logger.error(f"Gemini API quota exceeded: {exc}")
-                raise QuotaExceededError("The Gemini API token limit has been reached.") from exc
+            except QuotaExceededError:
+                raise
             except Exception as exc:
                 logger.error(f"Failed asking follow-up: {exc}")
                 return ChatResponseData(
                     message="Could you tell me a little more about your symptoms?",
                     risk_level=Urgency.medium,
                     follow_up_questions=["Can you describe your symptoms in more detail?"],
-                    structured=None
+                    structured=None,
                 )
-        else:
-            prompt = """
+
+        prompt = """
             Analyze the gathered symptoms and chat history.
             
             # Behavior Rules
@@ -164,62 +167,64 @@ class LLMService:
                 }
             }
             """
-            symptoms_str = ", ".join(session.symptoms)
+        symptoms_str = ", ".join(session.symptoms)
 
+        try:
+            msg = await self._invoke(
+                [
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(
+                        content=(
+                            f"{medical_context_str}"
+                            f"Chat history:\n{history_str}\n\n"
+                            f"Symptoms: {symptoms_str}\n"
+                            f"Duration: {session.duration}\n"
+                            f"Task: {prompt}"
+                        )
+                    ),
+                ],
+                operation="generate_response",
+            )
+            text = (getattr(msg, "content", None) or str(msg)).strip()
+
+            m = re.search(r"\{[\s\S]*\}", text)
+            if m:
+                text = m.group(0)
+            data = json.loads(text)
+
+            risk_val_str = str(data.get("risk_level", "MEDIUM")).upper()
             try:
-                msg = await self._llm.ainvoke(
-                    [
-                        SystemMessage(content=system_prompt),
-                        HumanMessage(
-                            content=(
-                                f"{medical_context_str}"
-                                f"Chat history:\n{history_str}\n\n"
-                                f"Symptoms: {symptoms_str}\n"
-                                f"Duration: {session.duration}\n"
-                                f"Task: {prompt}"
-                            )
-                        ),
-                    ]
-                )
-                text = (getattr(msg, "content", None) or str(msg)).strip()
+                risk_val = Urgency(risk_val_str)
+            except ValueError:
+                risk_val = Urgency.medium
 
-                m = re.search(r"\{[\s\S]*\}", text)
-                if m:
-                    text = m.group(0)
-                data = json.loads(text)
+            struct_data = data.get("structured", {})
 
-                risk_val_str = str(data.get("risk_level", "MEDIUM")).upper()
-                try:
-                    risk_val = Urgency(risk_val_str)
-                except ValueError:
-                    risk_val = Urgency.medium
+            structured = StructuredDiagnosis(
+                summary=struct_data.get("summary", "Summary unavailable."),
+                possible_causes=struct_data.get("possible_causes", []),
+                advice=struct_data.get("advice", []),
+                when_to_worry=struct_data.get("when_to_worry", []),
+                recommended_doctors=struct_data.get("recommended_doctors", []),
+                risk=struct_data.get("risk", "Medium physical risk"),
+            )
 
-                struct_data = data.get("structured", {})
-                
-                structured = StructuredDiagnosis(
-                    summary=struct_data.get("summary", "Summary unavailable."),
-                    possible_causes=struct_data.get("possible_causes", []),
-                    advice=struct_data.get("advice", []),
-                    when_to_worry=struct_data.get("when_to_worry", []),
-                    recommended_doctors=struct_data.get("recommended_doctors", []),
-                    risk=struct_data.get("risk", "Medium physical risk")
-                )
+            return ChatResponseData(
+                message=data.get(
+                    "message", "I have generated a structured medical report based on your symptoms."
+                ),
+                risk_level=risk_val,
+                follow_up_questions=[],
+                structured=structured,
+            )
 
-                return ChatResponseData(
-                    message=data.get("message", "I have generated a structured medical report based on your symptoms."),
-                    risk_level=risk_val,
-                    follow_up_questions=[],
-                    structured=structured
-                )
-
-            except ResourceExhausted as exc:
-                logger.error(f"Gemini API quota exceeded: {exc}")
-                raise QuotaExceededError("The Gemini API token limit has been reached.") from exc
-            except Exception as exc:
-                logger.exception("Failed generating final response")
-                return ChatResponseData(
-                    message="I wasn't able to generate a detailed report right now. Please reach out to a healthcare professional.",
-                    risk_level=Urgency.medium,
-                    follow_up_questions=[],
-                    structured=None
-                )
+        except QuotaExceededError:
+            raise
+        except Exception as exc:
+            logger.exception("Failed generating final response")
+            return ChatResponseData(
+                message="I wasn't able to generate a detailed report right now. Please reach out to a healthcare professional.",
+                risk_level=Urgency.medium,
+                follow_up_questions=[],
+                structured=None,
+            )
