@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers.chat import router as chat_router
+from src.core.config import settings
 
 
 def create_app() -> FastAPI:
@@ -25,7 +26,11 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     async def health():
-        return {"status": "ok"}
+        return {
+            "status": "ok",
+            "gemini_configured": bool(settings.gemini_api_key),
+            "gemini_model": settings.gemini_model,
+        }
 
     return app
 

@@ -129,6 +129,21 @@ async def chat(body: ChatRequest):
                 message=exc.format_user_message(),
             ),
         )
+    except RuntimeError as exc:
+        # Common production misconfiguration: GEMINI_API_KEY not injected into the runtime environment.
+        if str(exc) == "GEMINI_API_KEY is not set":
+            return APIResponse(
+                success=False,
+                data=None,
+                error=ErrorDetail(
+                    code="CONFIGURATION_ERROR",
+                    message=(
+                        "GEMINI_API_KEY is not set. If deploying to Railway, add GEMINI_API_KEY "
+                        "to the service Variables and redeploy."
+                    ),
+                ),
+            )
+        raise
     except Exception as exc:
         logger.error(f"[ERROR] Exception: {exc}")
         return APIResponse(
