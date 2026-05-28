@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 from loguru import logger
 
-from app.models.schemas import ChatRequest, ChatResponseData, APIResponse, ErrorDetail, Urgency
+from app.models.schemas import ChatRequest, ChatResponseData, APIResponse, ErrorDetail, Urgency, ResponseType
 from app.services.conversation_manager import ConversationManager
 from app.services.llm_service import LLMService, QuotaExceededError
 from app.services.gemini_quota import enrich_quota_error
@@ -17,6 +17,7 @@ _llm_service: LLMService | None = None
 # Ordered pipeline steps for quota progress logging and resume guidance.
 _PIPELINE_STEPS = [
     "Emergency keyword screening",
+    "Doctor-search intent detection via Gemini (llm_service.detect_doctor_intent)",
     "User message stored in session",
     "Symptom analysis via Gemini (llm_service.analyze_input)",
     "Session updated with symptoms and medical context",
@@ -25,12 +26,18 @@ _PIPELINE_STEPS = [
 ]
 
 _OPERATION_FAILED_INDEX = {
-    "analyze_input": 2,
-    "generate_response": 5,
-    "generate_response_raw": 5,
+    "detect_doctor_intent": 1,
+    "analyze_input": 3,
+    "generate_response": 6,
+    "generate_response_raw": 6,
+    "generate_response_for_doctors": 6,
 }
 
 _OPERATION_RESUME = {
+    "detect_doctor_intent": (
+        "POST /api/v1/chat with the same session_id and message "
+        "(re-runs from llm_service.detect_doctor_intent)"
+    ),
     "analyze_input": (
         "POST /api/v1/chat with the same session_id and message "
         "(re-runs from llm_service.analyze_input)"
@@ -38,6 +45,10 @@ _OPERATION_RESUME = {
     "generate_response": (
         "POST /api/v1/chat with the same session_id and message "
         "(session state is saved; re-runs from llm_service.generate_response)"
+    ),
+    "generate_response_for_doctors": (
+        "POST /api/v1/chat with the same session_id, empty message, and tool_result "
+        "(re-runs from llm_service.generate_response_for_doctors)"
     ),
     "generate_response_raw": "llm_service.generate_response_raw(prompt)",
 }
@@ -68,12 +79,36 @@ async def chat(body: ChatRequest):
     is_final: bool | None = None
 
     try:
+        llm_service = get_llm_service()
+
+        # ---------------------------------------------------------------
+        # Branch B — Client is returning doctor results from the .NET backend.
+        # Skip the symptom pipeline entirely; ask the AI to present the list.
+        # ---------------------------------------------------------------
+        if body.tool_result and body.tool_result.tool == "get_doctors":
+            logger.info(
+                "[AGENT] tool_result received for 'get_doctors' | session={} | doctors={}",
+                session_id,
+                len(body.tool_result.doctors),
+            )
+            session = _conversation_manager.get_session(session_id)
+            llm_response = await llm_service.generate_response_for_doctors(
+                session, body.tool_result.doctors
+            )
+            logger.info(f"[AGENT] Doctor list presented to patient: \"{llm_response.message}\"")
+            _conversation_manager.add_message(session_id, "assistant", llm_response.message)
+            return APIResponse(success=True, data=llm_response)
+
+        # ---------------------------------------------------------------
+        # Normal flow — process patient message
+        # ---------------------------------------------------------------
         if RiskEngine.check_emergency(user_text):
             emergency_message = (
                 "Your symptoms may indicate a medical emergency. Please call emergency services "
                 "(911 / 112) or go to the nearest emergency room immediately. Do not stay alone."
             )
             data = ChatResponseData(
+                type=ResponseType.chat,
                 message=emergency_message,
                 risk_level=Urgency.emergency,
                 follow_up_questions=[],
@@ -85,7 +120,34 @@ async def chat(body: ChatRequest):
         logger.info(f"[INFO] User: \"{user_text}\"")
         _conversation_manager.add_message(session_id, "user", user_text)
 
-        llm_service = get_llm_service()
+        # ---------------------------------------------------------------
+        # Branch A — Detect doctor-search intent before symptom analysis.
+        # If the patient wants a doctor, return a get_doctors tool call immediately.
+        # ---------------------------------------------------------------
+        doctor_params = await llm_service.detect_doctor_intent(user_text)
+        if doctor_params is not None:
+            logger.info(
+                "[AGENT] Doctor intent detected | session={} | specialization={} | location={} | min_rating={}",
+                session_id,
+                doctor_params.specialization,
+                doctor_params.location,
+                doctor_params.min_rating,
+            )
+            tool_call_message = "Let me find the right doctor for you."
+            _conversation_manager.add_message(session_id, "assistant", tool_call_message)
+            data = ChatResponseData(
+                type=ResponseType.get_doctors,
+                message=tool_call_message,
+                risk_level=Urgency.low,
+                follow_up_questions=[],
+                structured=None,
+                search_params=doctor_params,
+            )
+            return APIResponse(success=True, data=data)
+
+        # ---------------------------------------------------------------
+        # Symptom analysis pipeline (unchanged)
+        # ---------------------------------------------------------------
         analysis = await llm_service.analyze_input(user_text)
         symptoms = analysis.get("symptoms", [])
         duration = analysis.get("duration", "")

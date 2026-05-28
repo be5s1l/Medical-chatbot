@@ -6,7 +6,11 @@ from loguru import logger
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
-from app.models.schemas import SessionState, ChatResponseData, StructuredDiagnosis, Urgency
+from app.models.schemas import (
+    SessionState, ChatResponseData, StructuredDiagnosis, Urgency,
+    ResponseType, DoctorSearchParams, DoctorResult,
+    UIComponent, UIComponentType,
+)
 from src.core.config import settings
 from app.services.conversation_manager import ARABIC_SYSTEM_TEMPLATE, ENGLISH_SYSTEM_TEMPLATE
 from app.services.context_filter import ContextFilter
@@ -35,6 +39,145 @@ class LLMService:
             return await self._llm.ainvoke(messages)
 
         return await invoke_with_quota_handling(_call, operation=operation)
+
+    # ------------------------------------------------------------------
+    # Agentic doctor search helpers
+    # ------------------------------------------------------------------
+
+    async def detect_doctor_intent(self, user_text: str) -> DoctorSearchParams | None:
+        """
+        Check whether the user wants to find/book a doctor.
+        Returns DoctorSearchParams with extracted filters if intent is found,
+        or None if this is a normal medical/symptom message.
+        """
+        prompt = f"""
+        Determine whether the user's message expresses an intent to FIND, SEE, or BOOK a doctor.
+        Examples of positive intent: "I need a cardiologist", "find me a doctor near Cairo", "who is a good dermatologist?"
+        Examples of negative intent (symptoms only): "I have a headache", "my stomach hurts"
+
+        If the intent is to find a doctor, extract:
+        - specialization (e.g. "cardiologist", "dermatologist") — null if not mentioned
+        - location (city or area, e.g. "Cairo") — null if not mentioned
+        - min_rating (float 0-5 based on words like "highly rated", "good", "best") — null if not mentioned
+
+        Return ONLY valid JSON:
+        If YES: {{"wants_doctor": true, "specialization": "...", "location": "...", "min_rating": null}}
+        If NO:  {{"wants_doctor": false}}
+
+        User message: "{user_text}"
+        """
+        try:
+            msg = await self._invoke(
+                [
+                    SystemMessage(content="You are an intent classifier for a medical assistant. Be concise and accurate."),
+                    HumanMessage(content=prompt),
+                ],
+                operation="detect_doctor_intent",
+            )
+            text = (getattr(msg, "content", None) or str(msg)).strip()
+            m = re.search(r"\{[\s\S]*\}", text)
+            if m:
+                text = m.group(0)
+            data = json.loads(text)
+            if not data.get("wants_doctor", False):
+                return None
+            return DoctorSearchParams(
+                specialization=data.get("specialization") or None,
+                location=data.get("location") or None,
+                min_rating=data.get("min_rating") or None,
+            )
+        except QuotaExceededError:
+            raise
+        except Exception as exc:
+            logger.error(f"Failed to detect doctor intent: {exc}")
+            return None
+
+    async def generate_response_for_doctors(
+        self,
+        session: SessionState,
+        doctors: List[DoctorResult],
+    ) -> ChatResponseData:
+        """
+        Given a list of DoctorResult objects fetched by the client, ask Gemini
+        to present them conversationally in the user's language.
+        """
+        system_prompt = self._get_system_prompt()
+        history_str = "\n".join([f"{m['role'].capitalize()}: {m['content']}" for m in session.messages])
+
+        if not doctors:
+            no_result_prompt = (
+                "The patient was searching for a doctor but no results were found. "
+                "Politely let them know and suggest they try a different search or consult online."
+        )
+            try:
+                msg = await self._invoke(
+                    [
+                        SystemMessage(content=system_prompt),
+                        HumanMessage(content=f"Chat history:\n{history_str}\n\nTask: {no_result_prompt}"),
+                    ],
+                    operation="generate_response_for_doctors",
+                )
+                reply = (getattr(msg, "content", None) or str(msg)).strip()
+            except QuotaExceededError:
+                raise
+            except Exception:
+                reply = "Sorry, I couldn't find any doctors matching your criteria. Please try a different search."
+            return ChatResponseData(
+                type=ResponseType.chat,
+                message=reply,
+                risk_level=Urgency.low,
+                follow_up_questions=[],
+                structured=None,
+            )
+
+        # Build a numbered doctor list for the prompt
+        doctor_lines = []
+        for i, doc in enumerate(doctors, start=1):
+            parts = [f"{i}. {doc.name} — {doc.specialization}"]
+            if doc.clinic:
+                parts.append(f"Clinic: {doc.clinic}")
+            if doc.location:
+                parts.append(f"Location: {doc.location}")
+            if doc.rating is not None:
+                parts.append(f"Rating: {doc.rating}/5")
+            if doc.available is not None:
+                parts.append("Available" if doc.available else "Not available right now")
+            doctor_lines.append(" | ".join(parts))
+        doctors_str = "\n".join(doctor_lines)
+
+        present_prompt = f"""
+        The patient was looking for a doctor. Here are the results fetched from the system:
+
+{doctors_str}
+
+        Present these doctors to the patient in a friendly, readable way in the user's language.
+        - Keep it concise.
+        - Highlight availability and rating.
+        - End by asking if they would like to book with any of them.
+        - Do NOT add markdown, bullet symbols, or emojis inside structured fields.
+        """
+        try:
+            msg = await self._invoke(
+                [
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(content=f"Chat history:\n{history_str}\n\nTask: {present_prompt}"),
+                ],
+                operation="generate_response_for_doctors",
+            )
+            reply = (getattr(msg, "content", None) or str(msg)).strip()
+        except QuotaExceededError:
+            raise
+        except Exception as exc:
+            logger.error(f"Failed generating doctor list response: {exc}")
+            reply = "Here are the doctors I found for you: " + ", ".join(d.name for d in doctors)
+
+        return ChatResponseData(
+            type=ResponseType.chat,
+            message=reply,
+            risk_level=Urgency.low,
+            follow_up_questions=[],
+            structured=None,
+        )
 
     async def generate_response_raw(self, prompt: str) -> str:
         """Reusable function to generate a raw text response from the LLM."""
@@ -97,18 +240,34 @@ class LLMService:
 
         if not is_final:
             prompt = """
-            Based on the conversation so far, ask 1 to 2 follow-up questions to gather missing medical details 
-            (e.g., duration, severity, related symptoms).
-            
-            IMPORTANT:
+            Based on the conversation so far, ask 1 follow-up question to gather a missing medical detail
+            (e.g., severity, duration, related symptoms, or body location).
+
+            IMPORTANT — Response rules:
             - If this is the FIRST response after symptoms were described, include a BRIEF empathy sentence.
             - Otherwise, be direct and natural.
-            - Ask ONLY 1-2 questions.
-            
+            - Ask ONLY 1 question.
+
+            IMPORTANT — UI component rules:
+            Choose the most appropriate UI widget for the patient to answer:
+            * "radio"    → the question has MUTUALLY EXCLUSIVE answers the patient picks ONE of.
+                           Use for: severity (Mild/Moderate/Severe), yes/no, duration ranges, single location.
+            * "checkbox" → the patient may select MULTIPLE answers.
+                           Use for: additional symptoms present, body areas affected.
+            * "text"     → the question is open-ended and does not fit a fixed option list.
+
+            If type is "radio" or "checkbox", provide 3–5 short, distinct options in the user's language.
+            Always set allow_other to true so the patient can type freely if none fit.
+
             Return ONLY valid JSON in this exact format:
             {
-                "message": "A single conversational string asking the follow-up questions in the user's language.",
-                "follow_up_questions": ["Question 1 (in user's language)", "Question 2 (in user's language)"]
+                "message": "A single conversational string with the follow-up question in the user's language.",
+                "follow_up_questions": ["The same question rephrased concisely (in user's language)"],
+                "ui_component": {
+                    "type": "radio" | "checkbox" | "text",
+                    "options": ["Option 1", "Option 2", "Option 3"],
+                    "allow_other": true
+                }
             }
             """
             try:
@@ -127,21 +286,37 @@ class LLMService:
                     text = m.group(0)
                 data = json.loads(text)
 
+                # Parse the ui_component block returned by the LLM
+                ui_raw = data.get("ui_component", {})
+                try:
+                    ui_type = UIComponentType(ui_raw.get("type", "text"))
+                except ValueError:
+                    ui_type = UIComponentType.text
+                ui = UIComponent(
+                    type=ui_type,
+                    options=ui_raw.get("options", []),
+                    allow_other=ui_raw.get("allow_other", True),
+                )
+
                 return ChatResponseData(
+                    type=ResponseType.chat,
                     message=data.get("message", "Could you tell me a little more about your symptoms?"),
                     risk_level=Urgency.medium,
                     follow_up_questions=data.get("follow_up_questions", []),
                     structured=None,
+                    ui=ui,
                 )
             except QuotaExceededError:
                 raise
             except Exception as exc:
                 logger.error(f"Failed asking follow-up: {exc}")
                 return ChatResponseData(
+                    type=ResponseType.chat,
                     message="Could you tell me a little more about your symptoms?",
                     risk_level=Urgency.medium,
                     follow_up_questions=["Can you describe your symptoms in more detail?"],
                     structured=None,
+                    ui=UIComponent(type=UIComponentType.text),
                 )
 
         prompt = """
@@ -210,6 +385,7 @@ class LLMService:
             )
 
             return ChatResponseData(
+                type=ResponseType.chat,
                 message=data.get(
                     "message", "I have generated a structured medical report based on your symptoms."
                 ),
@@ -223,6 +399,7 @@ class LLMService:
         except Exception as exc:
             logger.exception("Failed generating final response")
             return ChatResponseData(
+                type=ResponseType.chat,
                 message="I wasn't able to generate a detailed report right now. Please reach out to a healthcare professional.",
                 risk_level=Urgency.medium,
                 follow_up_questions=[],
